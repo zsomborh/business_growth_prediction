@@ -264,10 +264,9 @@ tuned_logit_lasso_model <- logit_lasso_model$finalModel
 best_lambda <- logit_lasso_model$bestTune$lambda
 logit_models[["LASSO"]] <- logit_lasso_model
 lasso_coeffs <- as.matrix(coef(tuned_logit_lasso_model, best_lambda))
-best_lambda
+
 CV_RMSE_folds[["LASSO"]] <- logit_lasso_model$resample[,c("Resample", "RMSE")]
 
-CV_RMSE_folds
 
 #############################################x
 # PART I
@@ -585,14 +584,11 @@ rf_model_p <- train(
     num.threads = 2
 )
 
-rf_model_p <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/models/rf_model_p.rds')
-
-rf_model_p$results
 
 best_mtry <- rf_model_p$bestTune$mtry
 best_min_node_size <- rf_model_p$bestTune$min.node.size
 
-best_min_node_size
+
 # Get average (ie over the folds) RMSE and AUC ------------------------------------
 CV_RMSE_folds[["rf_p"]] <- rf_model_p$resample[,c("Resample", "RMSE")]
 
@@ -673,7 +669,6 @@ rf_summary <- data.frame("CV RMSE" = CV_RMSE[["rf_p"]],
                          "Avg expected loss" = expected_loss[["rf_p"]],
                          "Expected loss for Fold5" = expected_loss_cv[[fold]])
 
-rf_summary
 
 
 # Create plots - this is for Fold5
