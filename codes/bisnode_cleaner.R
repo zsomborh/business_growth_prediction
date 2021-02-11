@@ -20,39 +20,14 @@
 
 # ------------------------------------------------------------------------------------------------------
 #### SET UP
-# It is advised to start a new session for every case study
+
 # CLEAR MEMORY
 rm(list=ls())
 
-# Import libraries
-#library(haven)
-#library(glmnet)
-#library(purrr)
-#library(margins)
-#library(skimr)
-#library(kableExtra)
 library(Hmisc)
-#library(cowplot)
-#library(gmodels) 
 library(lspline)
-#library(sandwich)
 library(modelsummary)
-
-#library(rattle)
-#library(caret)
-#library(pROC)
-#library(ranger)
-#library(rpart)
-#library(partykit)
-#library(rpart.plot)
 library(tidyverse)
-
-
-# set working directory
-# option A: open material as project
-# option B: set working directory for da_case_studies
-#           example: setwd("C:/Users/bekes.gabor/Documents/github/da_case_studies/")
-
 
 
 ###########################################################
@@ -94,7 +69,7 @@ data <- data %>%
     group_by(comp_id) %>%
     mutate(g = (lead(sales,2)-sales)/sales %>%
                as.numeric(.),
-           fast_g = ifelse(g > two_year_exp_earn & !is.na(growth_two_years), 1,0) %>%  as.numeric())%>%
+           fast_g = ifelse(g > two_year_exp_earn & !is.na(g), 1,0) %>%  as.numeric())%>%
     ungroup()
 
 data %>%  select(comp_id, year, sales, g,fast_g) %>% group_by(fast_g) %>%  summarise(n(),nrow(data),meang= median(g, na.rm = T)) 
@@ -259,6 +234,7 @@ data <- data %>%
 # number emp, very noisy measure
 data <- data %>%
     mutate(labor_avg_mod = ifelse(is.na(labor_avg), mean(labor_avg, na.rm = TRUE), labor_avg),
+           labor_avg_mod_sq = labor_avg_mod **2, 
            flag_miss_labor_avg = as.numeric(is.na(labor_avg)))
 
 summary(data$labor_avg)
@@ -288,7 +264,7 @@ ggplot(data = data, aes(x=sales_mil_log, y=as.numeric(fast_g))) +
     geom_point(size=2,  shape=20, stroke=2, fill="blue", color="blue") +
     geom_smooth(method = "lm", formula = y ~ poly(x,2), color='red', se = F, size=1)+
     geom_smooth(method="loess", se=F, colour='green', size=1.5, span=0.9) +
-    labs(x = "sales_mil_log",y = "default") +
+    labs(x = "sales_mil_log",y = "fast") +
     theme_minimal()
 
 
@@ -307,17 +283,16 @@ Hmisc::describe(data$d1_sales_mil_log) # no missing
 ggplot(data = data, aes(x=d1_sales_mil_log, y=as.numeric(fast_g))) +
     geom_point(size=2,  shape=20, stroke=2, fill="blue", color="blue") +
     geom_smooth(method="loess", se=F, colour="black", size=1.5, span=0.9) +
-    labs(x = "d1_sales_mil_log",y = "default") +
+    labs(x = "d1_sales_mil_log",y = "fast") +
     theme_minimal() +
     scale_x_continuous(limits = c(-7,10), breaks = seq(-6,10, 4))
 
 # generate variables ---------------------------------------------------
 
 data <- data %>%
-    mutate(flag_low_d1_sales_mil_log = ifelse(d1_sales_mil_log < -1.5, 1, 0),
+    mutate(flag_low_d1_sales_mil_log = ifelse(d1_sales_mil_log < -2, 1, 0),
            flag_high_d1_sales_mil_log = ifelse(d1_sales_mil_log > 1.5, 1, 0),
-           d1_sales_mil_log_mod = ifelse(d1_sales_mil_log < -1.5, -1.5,
-                                         ifelse(d1_sales_mil_log > 1.5, 1.5, d1_sales_mil_log)),
+           d1_sales_mil_log_mod = ifelse(d1_sales_mil_log < -2, -2, d1_sales_mil_log),
            d1_sales_mil_log_mod_sq = d1_sales_mil_log_mod^2
     )
 
@@ -337,11 +312,31 @@ data <- data %>%
 ggplot(data = data, aes(x=d1_sales_mil_log_mod, y=as.numeric(fast_g))) +
     geom_point(size=2,  shape=20, stroke=2, fill="blue", color="blue") +
     geom_smooth(method="loess", se=F, colour="black", size=1.5, span=0.9) +
-    labs(x = "d1_sales_mil_log",y = "default") +
+    labs(x = "d1_sales_mil_log_mod",y = "fast") +
     theme_minimal() +
-    scale_x_continuous(limits = c(-1.5,1.5), breaks = seq(-1.5,1.5, 0.5))
+    scale_x_continuous(limits = c(-2,7), breaks = seq(-1.5,1.5, 0.5))
+
+#ceo age
+
+colnames(data)
+
+ggplot(data = data, aes(x=ceo_age, y=as.numeric(fast_g))) +
+    geom_point(size=2,  shape=20, stroke=2, fill="blue", color="blue") +
+    geom_smooth(method="loess", se=F, colour="black", size=1.5, span=0.9) +
+    labs(x = "ceo_age",y = "fast") +
+    theme_minimal() 
+    #scale_x_continuous(limits = c(-2,7), breaks = seq(-1.5,1.5, 0.5))
+
+#labor avg
+
+ggplot(data = data, aes(x=labor_avg_mod, y=as.numeric(fast_g))) +
+    geom_point(size=2,  shape=20, stroke=2, fill="blue", color="blue") +
+    geom_smooth(method="loess", se=F, colour="black", size=1.5, span=0.9) +
+    labs(x = "lab_avg_mod",y = "fast") +
+    theme_minimal() 
 
 # check variables
 datasummary_skim(data, type="numeric")
 
 write_csv(data, "C:/Users/T450s/Desktop/programming/git/business_growth_prediction/data/clean/bisnode_firms_clean.csv")
+saveRDS(data, "C:/Users/T450s/Desktop/programming/git/business_growth_prediction/data/clean/bisnode_firms_clean.rds")

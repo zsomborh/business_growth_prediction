@@ -1,0 +1,208 @@
+---
+title: "Predicting firm growth"
+author: "Zsombor Hegedus"
+date: '2021 february 11 '
+output:
+    prettydoc::html_pretty:
+     theme: architect
+     highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r pack_n_load, include=FALSE, cache = TRUE}
+
+library(haven)
+library(glmnet)
+library(purrr)
+library(margins)
+library(skimr)
+library(kableExtra)
+library(Hmisc)
+library(cowplot)
+library(gmodels) 
+library(lspline)
+library(sandwich)
+library(modelsummary)
+library(rattle)
+library(caret)
+library(pROC)
+library(ranger)
+library(rpart)
+library(partykit)
+library(rpart.plot)
+library(viridis)
+library(xgboost)
+library(ggpubr)
+
+source('https://raw.githubusercontent.com/zsomborh/business_growth_prediction/main/codes/helper.R')
+data <- readRDS("C:/Users/T450s/Desktop/programming/git/business_growth_prediction/data/clean/bisnode_firms_clean.rds")
+data <- data.frame(data)
+
+# define variable sets
+rawvars <-  c("curr_assets", "curr_liab", "extra_exp", "extra_inc", "extra_profit_loss", "fixed_assets",
+              "inc_bef_tax", "intang_assets", "inventories", "liq_assets", "material_exp", "personnel_exp",
+              "profit_loss_year", "sales", "share_eq", "subscribed_cap")
+qualityvars <- c("balsheet_flag", "balsheet_length", "balsheet_notfullyear")
+engvar <- c("total_assets_bs", "fixed_assets_bs", "liq_assets_bs", "curr_assets_bs",
+            "share_eq_bs", "subscribed_cap_bs", "intang_assets_bs", "extra_exp_pl",
+            "extra_inc_pl", "extra_profit_loss_pl", "inc_bef_tax_pl", "inventories_pl",
+            "material_exp_pl", "profit_loss_year_pl", "personnel_exp_pl")
+engvar2 <- c("extra_profit_loss_pl_quad", "inc_bef_tax_pl_quad",
+             "profit_loss_year_pl_quad", "share_eq_bs_quad", 'labor_avg_mod_sq')
+engvar3 <- c(grep("*flag_low$", names(data), value = TRUE),
+             grep("*flag_high$", names(data), value = TRUE),
+             grep("*flag_error$", names(data), value = TRUE),
+             grep("*flag_zero$", names(data), value = TRUE))
+d1 <-  c("d1_sales_mil_log_mod", "d1_sales_mil_log_mod_sq",
+         "flag_low_d1_sales_mil_log", "flag_high_d1_sales_mil_log")
+hr <- c("female", "ceo_age", "flag_high_ceo_age", "flag_low_ceo_age",
+        "flag_miss_ceo_age", "ceo_count", "labor_avg_mod",
+        "flag_miss_labor_avg", "foreign_management")
+firm <- c("age", "age2", "new", "ind2_cat", "m_region_loc", "urban_m")
+
+# interactions for logit, LASSO
+interactions1 <- c("ind2_cat*age", "ind2_cat*age2",
+                   "ind2_cat*d1_sales_mil_log_mod", "ind2_cat*sales_mil_log",
+                   "ind2_cat*ceo_age", "ind2_cat*foreign_management",
+                   "ind2_cat*female",   "ind2_cat*urban_m", "ind2_cat*labor_avg_mod")
+interactions2 <- c("sales_mil_log*age", "sales_mil_log*female",
+                   "sales_mil_log*profit_loss_year_pl", "sales_mil_log*foreign_management")
+
+
+X1 <- c("sales_mil_log", "sales_mil_log_sq", "d1_sales_mil_log_mod", "profit_loss_year_pl", "ind2_cat")
+X2 <- c("sales_mil_log", "sales_mil_log_sq", "d1_sales_mil_log_mod", "profit_loss_year_pl", "fixed_assets_bs","share_eq_bs","curr_liab_bs",   "curr_liab_bs_flag_high", "curr_liab_bs_flag_error",  "age","foreign_management" , "ind2_cat")
+X3 <- c("sales_mil_log", "sales_mil_log_sq", firm, engvar,                   d1)
+X4 <- c("sales_mil_log", "sales_mil_log_sq", firm, engvar, engvar2, engvar3, d1, hr, qualityvars)
+X5 <- c("sales_mil_log", "sales_mil_log_sq", firm, engvar, engvar2, engvar3, d1, hr, qualityvars, interactions1, interactions2)
+
+
+# for LASSO
+logitvars <- c("sales_mil_log", "sales_mil_log_sq", engvar, engvar2, engvar3, d1, hr, firm, qualityvars, interactions1, interactions2)
+
+# for RF (no interactions, no modified features)
+rfvars  <-  c("sales_mil", "d1_sales_mil_log", rawvars, hr, firm, qualityvars)
+
+#
+logit_models <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/logit_summary.rds')
+sum_table2 <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/logit_3_summary.rds')
+roc_holdout_logit <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/roc_holdout_logit.rds')
+logit_cal_plot <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/logit_cal_plot.rds')
+roc_holdout_rf <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/roc_holdout_rf.rds')
+rf_cal_plot <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/rf_cal_plot.rds')
+all_results <-  readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/all_results.rds')
+naive_confusion <- readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/naive_confusion.rds')
+best_loss <-  readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/best_loss.rds')
+smart_confusion <-  readRDS('C:/Users/T450s/Desktop/programming/git/business_growth_prediction/tables_figures/smart_confusion.rds')
+
+
+
+
+cm_rf <- cbind(Model = rownames(naive_confusion$table), naive_confusion$table)
+rownames(cm_rf) <- 1:nrow(cm_rf)
+
+cm_rf2 <- cbind(Model = rownames(smart_confusion$table), smart_confusion$table)
+rownames(cm_rf2) <- 1:nrow(cm_rf2)
+
+```
+## Executive summary
+
+The goal of this analysis is to predict whether firms will have a substantial growth and are deemed investment worthy based on their financial fundamentals, and other important firm related characteristics. Several machine learning models such as Logit, Logit Lasso, Random Forest and XGBoost were built to predict probabilities and carry out classification on whether a given firm will have fast growth or not. For model building I used data available from [Gabos Data Analysis](https://osf.io/7epdj/) where the best performance was achieved by the Random Forest model and XGBoost. The features captured important firm related information, such as their balance sheet items, PnL statement, sales data, when the firm was established. Fast growth was defined as a growth in sales that in a two year horizon beat twice the average S&P500 returns. After picking the best model, I also found an optimal classification threshold to minimise potential lossess based on reasonable assumptions backed by qunatitative arguments.  
+
+*Github:* For this assignment, due to size limitations, I only submitted the HTML file, but for every workfiles with all the codes needed to produce this HTML, please visit the [github repo](https://github.com/zsomborh/business_growth_prediction).
+
+## Data description, feature and label engineering
+
+I used the `bisnode-firms` dataset avalilable on [Gabors Data Analysis site](https://osf.io/b2ft9/). The data was very noisy with a lot of unexplainable phenomena (such as negative sales), and required a lot of cleaning for which I used the codes available on Gabors Book website. In the analysis I filtered for 2013 only, for companies that had sales income above 1k EUR but lower than 10m EUR. Whenever filling techinques were used such as imputation or winsorising, I added a flag which also got fed into more complex models. Overall I worked with 18,883 observations each resembling a European company.
+
+When it comes to the features, the first step was to leverage the timeseries properties of the data and create $\Delta$ variable for sales. This will also be crucial for the target variable, but more on that later. Since in the analysis I will first use linear models with increasing complexity, it's better I define a set of variables for each case. When it comes to functional forms I committed log transformation of certain variables with skewed distributions, second order polynomials and interaction terms for the more complex cases. In order to decide on the functional forms I leverged lowess and checked the average probabilities associated with different ranges of the `x` variables. 
+
+A crucial task was identifying the target variable. I weighed different aspects when deciding on how to measure growth. Growth is not a concrete concept, and can vary in the eyes of the beholder - some might want to look for increments in capital, or higher number of employees, or maybe just the price of the stocks. Since I wanted to approach this problem from a venture capitalist perspective where my goal is to invest in companies that can achieve organic growth. From the data at my disposal the income from sales looks to be the cleanest proxy. I considered something to be fast growing in case its growth in sales can beat twice the average S&P500 returns (average is calculated for recent years, not counting the financial crises) in two years.
+
+## Simpler regression models
+
+My first modeling choice is to look at 5 logit models that have increasing complexity in terms of their predictors, and try out a logit lasso for the most complex case. My predictor sets are the same as the ones used in the case study in Chapter 17 with the addition of the quadratic form of the average annual employees, as that seemed to have a non-linear pattern when compared to the target variable. 
+
+The first model is basically predicting with a set of handpicked values such as transformed sales data, change of sales, annual P&L and industry used as a factor variable. The second incorporates further quantitative variables, and some company characteristics such as the age of the CEO, the ratio of foreign management. The third looks at even more balance sheet and P&L items and some engineered polynomials of features. The forth variables looks at even more engineered variables, characteristics that are describing the employees of the company like whether the CEO is female or not, and some qualitative features. And lastly the most complex model incorporates interactions between sales vs firm characteristics and industry vs firm characteristics. 
+
+The end result of these models are available in Table 1: 
+
+```{r table 1, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+knitr::kable(logit_models,
+             #row.names = c('Logit 1', 'Logit 2', 'Logit 3', 'Logit 4', 'Logit 5', 'Logit Lasso'),
+             col.names = c( "N.Coef", "RMSE", "AUC"),
+             caption= 'Model comparison for logit models in terms of AUC and RMSE', digits = c(0,3,3)) 
+```
+
+After setting aside 20% of my data as a holdout set, I used a 5-fold cross validation for train control. My loss function is RMSE, but since the exercise at hand is probability prediction I also included AUC. There is a substantial improvement between the first and the second and third models, but from there on, there doesn't seem to be a lot of improvements neither in RMSE nor in AUC. The Lasso eliminated almost a 100 predictors but still couldn't outperform the 4th or 5th case (the $\lambda$ parameter was a very small, close to zero number). If we were to select from these models only, the best ones would probably be the 3rd or 4th case, given that the 5th case is so much more complex compared to the others that it probably overfits the train data by a large margin. The coefficient estimates of the third case with marginal contributions are available in the Annexes. I will now look at more complex tree based models to see if I can improve the RMSE and AUC for the prediction.
+
+## More complex models
+
+After examining the logit and the logit lasso, I wanted to see if any improvement could be achieved by random forest and XGboost. My forest contained 500 trees, and for the tuning parameters I allowed 10 and 15 observations in the terminal nodes, and limited the number of possible predictors (further referred to as `m`) to choose from for each split to 5, 6 and 7. I used 5 fold cross validation for control for each model that is introduced in this paper, and rf wasn't an exception. For the XGBoost I allowed max 350 trees to be grown, with max depth of 2, 4 or 6. I set shrinkage to be 0.1, 0.05 and 0.01, minimum loss reduction to be 0.1 and allowed only 75% of the predictors to be used for each split. I experimented with other combinations as well, but it didn't seem to achieve any substantially superior performance. Table 2 compares the random forest and xgb models to two models from two logit modles from the earlier chapter. 
+
+```{r table 2, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+knitr::kable(all_results,
+             #row.names = c('Logit 1', 'Logit 3', 'Random Forest', 'XGBoost'),
+             col.names = c( "N.Coef", "RMSE", "AUC"),
+             caption= 'Model comparison for lall models in terms of AUC and RMSE', digits = c(0,3,3))
+
+```
+
+There is a noticable improvement both from an RMSE and AUC persepctive when looking at the two new models, but not so much difference between the random forest and the XGBoost. Based on the above the random forest is chosen as the model that I will use for classification. A comparison of the ROC curves for the best logit and the random forest model on the holdout sets are available in the Appendix. 
+
+## Classification 
+
+I wish to classify companies that will achieve fast growth in two years given their financial fundamentals, and other characteristics. My model choice is a random forest model in which I allowed minimum node size to be 15 and `m` to be 6. For this classification exercise, to chose a probability threshold I will continue to look at two aspects - the first one is a naive approach in which I just set the threshold to be the mean of the predicted probabilities. In the second approach, I will calibrate the model with a loss function that is more fit for the business case. 
+
+#### Naive approach
+
+To turn probability prediction into classification a threshold has to be chosen. This threshold will serve as guide as to from what predicted percentage will I identify a positive case. A naive case is when we say that if the predicted probability is above 50%, then that shall be a positive case. Defaulting to 50% however is not always sensible and should be avoided if possible. Instead the mean of the predicted probabilities and this will be the naive case in this exercise (the header contains the reference classes, while the first columns denotes the prediced classes).  
+
+```{r table 3, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+kbl(cm_rf, digits = 3)  %>% kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+```
+
+#### With defined loss function
+
+To tailor the task more to the business case, I came up with potential losses that I can expect given the type of error I make. My assumption when calibrating the losses is that the amount of growth in sales will be eqivalent to the amount of loss/gain I will incur. The false positive case is when I invest in a company, but it won't be fast growing in the end. I looked at the 20th percentile of the sales growth distribution - this is a naive 80% Value at Risk metric - which was a close to 70% decrease. For the false negative case I decided to be conservative and say that the money that I won't gain is the same as the threshold that I used to identify fast-growing companies, which was ca.30%. So to translate the thresholds given a 10m USD investment: in a false positive case I will lose ca.7m USD, in a false negative case I will not gain ca.3m USD. Using these parameters and optimal threshold can be found which is represented with the below figure. 
+
+```{r, fig 1, fig.width=6,fig.height=6, fig.align='center', fig.cap='Best threshold', echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
+best_loss
+```
+
+The best threshold is 0,31, in which case I can minimise the expected losses that I would suffer assuming this loss function and using my rf model. When run on the holdout set model performance is relatively good, compared to previous models, with an RMSE of 0.4475 and AUC of 0.6256. The confusion matrix for this case is shown in the below table. 
+
+```{r table 4, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+
+kbl(cm_rf2, digits = 3)  %>% 
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+```
+
+Interestingly the optimal threshold given the loss function is almost the same as the mean, so the last two cases don't deviate drastically. However when comparing the expected losses between the last case and the best logit model, the random forest yielded a result that is 10% lower than the logit case. This can be a substantial improvement in case this operation is scaled up and I decide to invest in all the ca.1600 positive  positive cases  
+
+## External validity
+
+Business growth is a very complicated process that is affected by a multitude of internal and environmental factors that drastically change over the years. I believe that the dataset used for this exercise was vast, and covered a lot of industries and companies all over Europe, however due to the changing nature of the business landscape external validity of this analysis might not be high. To increase external validity it would be advised to rerun the analysis for multiple years and by taking into account macro variables that somehow indicate the economic conditions in the area where we want to predict growth.
+
+## Conclusions
+
+In this analysis I looked at almost 20.000 European firms and tried to predict whether they will achieve fast growth in sales in the next two years in order to find good investment opportunities. I run different machine learning probability models for tha cause and decided to use a random forest model for the prediction. I used various firm characteristics as predictors and also experiment with different functional forms. After choosing the final model, I also did classification using two approaches; a naive one assuming a threshold to be the mean of the predicted probabilities, and by assuming a loss function. It turns out these are not really different, however an interesting finding is that random forest can potentially reduce the costs of 
+
+## Annexes
+
+```{r table 5, echo = FALSE , results = "asis", warning = FALSE, message = FALSE }
+knitr::kable(x = sum_table2, digits = 3,
+      col.names = c("Variable", "Coefficient", "SE", "dx/dy"),
+      caption = "Average Marginal Effects (dy/dx) for Logit Model") 
+```
+
+```{r, fig 2, fig.width=6,fig.height=6, fig.align='center', fig.cap='ROC curves and calibration plots for logit and random forest models', echo = FALSE , results = "asis", warning = FALSE, message = FALSE}
+ggarrange(roc_holdout_logit,  logit_cal_plot, roc_holdout_rf , rf_cal_plot, nrow = 2, ncol= 2)
+
+```
